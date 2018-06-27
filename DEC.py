@@ -65,14 +65,14 @@ def autoencoder(dims, act='relu'):
     h = x
 
     # internal layers in encoder
-    for i in range(n_stacks-1):
+    for i in range(n_stacks - 1):
         h = Dense(dims[i + 1], activation=act, name='encoder_%d' % i)(h)
 
     # hidden layer
     h = Dense(dims[-1], name='encoder_%d' % (n_stacks - 1))(h)  # hidden layer, features are extracted from here
 
     # internal layers in decoder
-    for i in range(n_stacks-1, 0, -1):
+    for i in range(n_stacks - 1, 0, -1):
         h = Dense(dims[i], activation=act, name='decoder_%d' % i)(h)
 
     # output
@@ -164,8 +164,8 @@ class DEC(object):
         if ae_weights is not None:  # load pretrained weights of autoencoder
             self.autoencoder.load_weights(ae_weights)
         else:
-            print 'ae_weights must be given. E.g.'
-            print 'python DEC.py mnist --ae_weights weights.h5'
+            print('ae_weights must be given. E.g.')
+            print('python DEC.py mnist --ae_weights weights.h5')
             exit()
 
         hidden = self.autoencoder.get_layer(name='encoder_%d' % (self.n_stacks - 1)).output
@@ -198,23 +198,24 @@ class DEC(object):
                    maxiter=2e4,
                    save_dir='./results/dec'):
 
-        print 'Update interval', update_interval
+        print('Update interval', update_interval)
         save_interval = x.shape[0] / self.batch_size * 5  # 5 epochs
-        print 'Save interval', save_interval
+        print('Save interval', save_interval)
 
         # initialize cluster centers using k-means
-        print 'Initializing cluster centers with k-means.'
+        print('Initializing cluster centers with k-means.')
         kmeans = KMeans(n_clusters=self.n_clusters, n_init=20)
         y_pred = kmeans.fit_predict(self.encoder.predict(x))
         y_pred_last = y_pred
         self.model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
 
         # logging file
-        import csv, os
+        import csv
+        import os
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
-        logfile = file(save_dir + '/dec_log.csv', 'wb')
+        logfile = open(save_dir + '/dec_log.csv', 'w')
         logwriter = csv.DictWriter(logfile, fieldnames=['iter', 'acc', 'nmi', 'ari', 'L'])
         logwriter.writeheader()
 
@@ -236,12 +237,12 @@ class DEC(object):
                     loss = np.round(loss, 5)
                     logdict = dict(iter=ite, acc=acc, nmi=nmi, ari=ari, L=loss)
                     logwriter.writerow(logdict)
-                    print 'Iter', ite, ': Acc', acc, ', nmi', nmi, ', ari', ari, '; loss=', loss
+                    print('Iter', ite, ': Acc', acc, ', nmi', nmi, ', ari', ari, '; loss=', loss)
 
                 # check stop criterion
                 if ite > 0 and delta_label < tol:
-                    print 'delta_label ', delta_label, '< tol ', tol
-                    print 'Reached tolerance threshold. Stopping training.'
+                    print('delta_label ', delta_label, '< tol ', tol)
+                    print('Reached tolerance threshold. Stopping training.')
                     logfile.close()
                     break
 
@@ -258,17 +259,49 @@ class DEC(object):
             # save intermediate model
             if ite % save_interval == 0:
                 # save IDEC model checkpoints
-                print 'saving model to:', save_dir + '/DEC_model_' + str(ite) + '.h5'
+                print('saving model to:', save_dir + '/DEC_model_' + str(ite) + '.h5')
                 self.model.save_weights(save_dir + '/DEC_model_' + str(ite) + '.h5')
 
             ite += 1
 
         # save the trained model
         logfile.close()
-        print 'saving model to:', save_dir + '/DEC_model_final.h5'
+        print('saving model to:', save_dir + '/DEC_model_final.h5')
         self.model.save_weights(save_dir + '/DEC_model_final.h5')
 
         return y_pred
+
+
+def save_weights(dec):
+    """save weigths in pytorch format"""
+    import torch
+
+    model = dec.autoencoder
+    names = [weight.name for layer in model.layers for weight in layer.weights]
+    weights = model.get_weights()
+
+    state_dict = {}
+    for name, weight in zip(names, weights):
+        i = int(name.split("/")[0].split("_")[-1])
+
+        if name.startswith('encoder'):
+            i_pytorch = i * 2
+            prefix = "encoder"
+        else:
+            i_pytorch = (3 - i) * 2
+            prefix = "decoder"
+
+        if name.endswith("kernel:0"):
+            k = "{}.{}.weight".format(prefix, i_pytorch)
+            v = torch.from_numpy(weight.T)
+        else:
+            k = "{}.{}.bias".format(prefix, i_pytorch)
+            v = torch.from_numpy(weight)
+
+        print(name, weight.shape, k, v.shape)
+        state_dict[k] = v
+
+    torch.save(state_dict, "./ae_weights/{}_ae_weights.pth".format(args.dataset))
 
 
 if __name__ == "__main__":
@@ -281,14 +314,13 @@ if __name__ == "__main__":
     parser.add_argument('--n_clusters', default=10, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--maxiter', default=2e4, type=int)
-    parser.add_argument('--gamma', default=0.1, type=float,
-                        help='coefficient of clustering loss')
+    parser.add_argument('--gamma', default=0.1, type=float, help='coefficient of clustering loss')
     parser.add_argument('--update_interval', default=140, type=int)
     parser.add_argument('--tol', default=0.001, type=float)
     parser.add_argument('--ae_weights', default=None, help='This argument must be given')
     parser.add_argument('--save_dir', default='results/dec')
     args = parser.parse_args()
-    print args
+    print(args)
 
     # load dataset
     from datasets import load_mnist, load_reuters, load_usps
@@ -302,12 +334,13 @@ if __name__ == "__main__":
     # prepare the DEC model
     dec = DEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=args.n_clusters, batch_size=args.batch_size)
 
-    dec.initialize_model(optimizer=SGD(lr=0.01, momentum=0.9),
-                         ae_weights=args.ae_weights)
+    dec.initialize_model(optimizer=SGD(lr=0.01, momentum=0.9), ae_weights=args.ae_weights)
     plot_model(dec.model, to_file='dec_model.png', show_shapes=True)
     dec.model.summary()
+
+    save_weights(dec)
     t0 = time()
     y_pred = dec.clustering(x, y=y, tol=args.tol, maxiter=args.maxiter,
                             update_interval=args.update_interval, save_dir=args.save_dir)
-    print 'acc:', cluster_acc(y, y_pred)
-    print 'clustering time: ', (time() - t0)
+    print('acc:', cluster_acc(y, y_pred))
+    print('clustering time: ', (time() - t0))
