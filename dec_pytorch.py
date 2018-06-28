@@ -209,6 +209,7 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
     y_pred_hard_last = result["y_pred_hard"]
 
     # Phase 2: Paramtger optimization
+    # FIXME: raise error if using break
     for i_epoch in np.arange(max_epoch):
         for i_batch, sample_batched in enumerate(dataloader):
             if use_gpu:
@@ -260,5 +261,6 @@ def main():
 
 if __name__ == '__main__':
 
+    train(data="mnist")
     train(data="reutersidf10k")
-    # train(data="usps")
+    train(data="usps")
