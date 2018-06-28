@@ -100,8 +100,8 @@ class DEC(torch.nn.Module):
         """
         print("  initial centorid using kmeans ...")
         encoded, _ = self.auto_encoder(x_all)
-        self.kmeans.fit(encoded.detach().numpy())
-        self.cluster_centroid.data = torch.from_numpy(self.kmeans.cluster_centers_)
+        self.kmeans.fit(encoded.detach().cpu().numpy())
+        self.cluster_centroid.data = torch.from_numpy(self.kmeans.cluster_centers_).cuda()
 
     def forward(self, x):
         """
@@ -132,7 +132,7 @@ class DEC(torch.nn.Module):
 
         return q
 
-    def kl_divergence(self, x):
+    def kl_loss(self, x):
         """
         Input:
           x: batch_size, d_feature
@@ -145,18 +145,16 @@ class DEC(torch.nn.Module):
 
         q = self.forward(x)
 
-        # calculate the auxiliary distribution p
-        f = q.sum(dim=0, keepdim=True)  # soft cluster frequencies
-        p_unmormalized = q.pow(2) / f.expand(batch_size, -1)
-        p = p_unmormalized / p_unmormalized.sum(dim=1, keepdim=True).expand(-1, n_cluster)  # batch_size, n_cluster
-        p_no_grad = p.detach()
+        with torch.no_grad():
+            # calculate the auxiliary distribution p
+            f = q.sum(dim=0, keepdim=True)  # soft cluster frequencies
+            p_unmormalized = q.pow(2) / f.expand(batch_size, -1)
+            p = p_unmormalized / p_unmormalized.sum(dim=1, keepdim=True).expand(-1, n_cluster)  # batch_size, n_cluster
 
         # calculate KL divengence loss: clustering_loss
-        # print("x", x[:2])
-        # print("p", p_no_grad[:2])
-        # print("q", q[:2])
-        print(q.shape, p.shape)
-        loss = torch.nn.KLDivLoss(size_average=True, reduce=True)(input=torch.log(q), target=p_no_grad)
+        # print("q={}\np={}\n".format(q, p))
+        loss = torch.nn.KLDivLoss(size_average=True, reduce=True)(input=torch.log(q), target=p)
+        # print(torch.nn.KLDivLoss(size_average=False, reduce=False)(input=torch.log(q), target=p).sum(dim=1))
 
         return loss
 
@@ -165,7 +163,7 @@ def train():
 
     from torch.utils.data import DataLoader
 
-    dec = DEC(ae_dims=[784, 500, 500, 2000, 10], ae_weights_path="../IDEC/ae_weights/mnist_ae_weights.pth")
+    dec = DEC(ae_dims=[784, 500, 500, 2000, 10], ae_weights_path="../IDEC/ae_weights/mnist_ae_weights.pth").cuda()
 
     from datasets import load_mnist
     x, y = load_mnist()
@@ -175,41 +173,47 @@ def train():
 
     # x = x[:500, :]
 
-    optimizer = torch.optim.Adam(dec.parameters(), lr=0.01)
+    optimizer = torch.optim.SGD(dec.parameters(), lr=0.1, momentum=0.9)
+    optimizer = torch.optim.Adam(dec.parameters(), lr=0.0001)
 
     dataloader = DataLoader(x, batch_size=256, shuffle=False, num_workers=4)
 
-    print("before init", dec.cluster_centroid)
+    # print("before init", dec.cluster_centroid)
     # Phase 1: Parameter Initialization
     dec.init_ae()
-    dec.init_centroid(x)
-    print("after init", dec.cluster_centroid)
+    dec.init_centroid(x.cuda())
+    # print("after init", dec.cluster_centroid)
 
     # Test
-    q = dec(x)
+    q = dec(x.cuda())
     y_pred = q.argmax(1)
     from DEC import cluster_acc
-    acc = np.round(cluster_acc(y.numpy(), y_pred.numpy()), 5)
+    acc = np.round(cluster_acc(y.cpu().numpy(), y_pred.cpu().numpy()), 5)
     print("kmeans, acc={}".format(acc))
 
     # Phase 2: Paramtger optimization
     for i_epoch in np.arange(10):
         for i_batch, sample_batched in enumerate(dataloader):
-            # sample_batched.requires_grad = False  # ?
-            loss = dec.kl_divergence(sample_batched)
-
-            y_pred_batch = dec(sample_batched)
-            # print(y_pred_batch[:2, :])
-
-            loss.backward()
-            optimizer.step()
             optimizer.zero_grad()
 
+            sample_batched = sample_batched.cuda()
+            # sample_batched.requires_grad = False  # ?
+            loss = dec.kl_loss(sample_batched)
+            loss.backward()
+            optimizer.step()
+
+            # for f in dec.parameters():
+            #     # print()
+            #     f.data.sub_(f.grad.data * 0.1)
+            #y_pred_batch = dec(sample_batched)
+            # print(y_pred_batch[:2, :])
+
             if i_batch % 10 == 0:
-                q = dec(x)
+                q = dec(x.cuda())
                 y_pred = q.argmax(1)
                 from DEC import cluster_acc
-                acc = np.round(cluster_acc(y.numpy(), y_pred.numpy()), 5)
+                acc = np.round(cluster_acc(y.cpu().numpy(), y_pred.cpu().numpy()), 5)
+
                 print("i_epoch={}, i_batch={}, acc={}, loss={}".format(i_epoch, i_batch, acc, loss.item()))
 
 
