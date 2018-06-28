@@ -119,8 +119,9 @@ class DEC(torch.nn.Module):
 
         Output:
           q: (batch_size, n_cluster) soft assignment of x
+          x_est: (batch_size, d_feature) reconstructed x
         """
-        x, _ = self.auto_encoder(x)
+        x, x_est = self.auto_encoder(x)
 
         batch_size = x.shape[0]
         n_cluster = self.n_cluster
@@ -134,10 +135,33 @@ class DEC(torch.nn.Module):
 
         q = q_unnormalized / q_unnormalized.sum(dim=1, keepdim=True).expand(-1, n_cluster)  # batch_size, n_cluster
 
-        return q
+        return q, x_est
+
+    def kl_ae_loss(self, x, gamma=0.1):
+        """Get the weighted average KL loss and auto-encoder reconstrution MSE loss (IDEC)
+        """
+        batch_size = x.shape[0]
+        n_cluster = self.n_cluster
+
+        q, x_est = self.forward(x)
+
+        with torch.no_grad():
+            # calculate the auxiliary distribution p
+            f = q.sum(dim=0, keepdim=True)  # soft cluster frequencies
+            p_unmormalized = q.pow(2) / f.expand(batch_size, -1)
+            p = p_unmormalized / p_unmormalized.sum(dim=1, keepdim=True).expand(-1, n_cluster)  # batch_size, n_cluster
+
+        # calculate KL divengence loss: clustering_loss
+        Lc = torch.nn.KLDivLoss(size_average=True, reduce=True)(input=torch.log(q), target=p)
+
+        # Lr
+        Lr = torch.nn.MSELoss(size_average=True, reduce=True)(input=x_est, target=x)
+
+        loss = Lc + gamma * Lr
+        return loss
 
     def kl_loss(self, x):
-        """ Get the KL loss
+        """ Get the KL loss(used in DEC)
         Input:
           x: batch_size, d_feature
 
@@ -147,7 +171,7 @@ class DEC(torch.nn.Module):
         batch_size = x.shape[0]
         n_cluster = self.n_cluster
 
-        q = self.forward(x)
+        q, _ = self.forward(x)
 
         with torch.no_grad():
             # calculate the auxiliary distribution p
@@ -161,7 +185,12 @@ class DEC(torch.nn.Module):
         return loss
 
 
-def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'):
+def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist', mode='dec'):
+    """
+    Input:
+      mode: dec using Lc; idec using Lr+gamma*Lc
+
+    """
 
     def load_data(data='mnist'):
         from datasets import load_mnist, load_reuters, load_usps
@@ -190,7 +219,18 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
         dec = dec.cuda()
 
     optimizer = torch.optim.SGD(dec.parameters(), lr=0.1, momentum=0.9)
-    optimizer = torch.optim.Adam(dec.parameters(), lr=0.0001)
+
+    # optimizer = torch.optim.SGD([
+    #     {"params": dec.auto_encoder.parameters(), 'lr': 0.5 * 1e-4},
+    #     {"params": dec.cluster_centroid, 'lr': 0.1}
+    # ],
+    #     lr=0.1, momentum=0.9)
+
+    # optimizer = torch.optim.Adam([
+    #     {"params": dec.auto_encoder.parameters(), 'lr': 0.5 * 1e-4},
+    #     {"params": dec.cluster_centroid, 'lr': 1e-1},
+    # ], lr=0.0001)
+    # optimizer = torch.optim.Adam(dec.parameters(), lr=0.001)
 
     dataloader = DataLoader(x, batch_size=256, shuffle=True, num_workers=1,
                             drop_last=False)  # parallel for gpu tensorf, raise error
@@ -216,7 +256,11 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
                 sample_batched = sample_batched.cuda()
 
             optimizer.zero_grad()
-            loss = dec.kl_loss(sample_batched)
+            if mode == "dec":
+                loss = dec.kl_loss(sample_batched)
+            else:
+                loss = dec.kl_ae_loss(sample_batched)
+
             loss.backward()
             optimizer.step()
 
@@ -242,7 +286,7 @@ def eval_model(model, x, y, use_gpu=True):
     if use_gpu:
         x = x.cuda()
 
-    y_pred_soft = model(x)
+    y_pred_soft, _ = model(x)
     y_pred_hard = y_pred_soft.argmax(1)
 
     # make sure numpy array
@@ -261,6 +305,9 @@ def main():
 
 if __name__ == '__main__':
 
-    train(data="mnist")
-    train(data="reutersidf10k")
-    train(data="usps")
+    # DEC
+    # train(data="mnist")
+    # train(data="reutersidf10k")
+    # train(data="usps")
+
+    train(data="mnist", mode="idec", tol=0.00001, max_epoch=100)

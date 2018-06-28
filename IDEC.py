@@ -103,7 +103,7 @@ class IDEC(object):
         import os
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        logfile = file(save_dir + '/idec_log.csv', 'wb')
+        logfile = open(save_dir + '/idec_log.csv', 'w')
         logwriter = csv.DictWriter(logfile, fieldnames=['iter', 'acc', 'nmi', 'ari', 'L', 'Lc', 'Lr'])
         logwriter.writeheader()
 
@@ -178,29 +178,29 @@ if __name__ == "__main__":
     parser.add_argument('--ae_weights', default=None, help='This argument must be given')
     parser.add_argument('--save_dir', default='results/idec')
     args = parser.parse_args()
-    print(args
+    print(args)
 
     # load dataset
-    optimizer=SGD(lr=0.1, momentum=0.99)
+    optimizer = SGD(lr=0.1, momentum=0.99)
     from datasets import load_mnist, load_reuters, load_usps
 
     if args.dataset == 'mnist':  # recommends: n_clusters=10, update_interval=140
-        x, y=load_mnist()
-        optimizer='adam'
+        x, y = load_mnist()
+        optimizer = 'adam'
     elif args.dataset == 'usps':  # recommends: n_clusters=10, update_interval=30
-        x, y=load_usps('data/usps')
+        x, y = load_usps('data/usps')
     elif args.dataset == 'reutersidf10k':  # recommends: n_clusters=4, update_interval=3
-        x, y=load_reuters('data/reuters')
+        x, y = load_reuters('data/reuters')
 
     # prepare the IDEC model
-    idec=IDEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=args.n_clusters, batch_size=args.batch_size)
+    idec = IDEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=args.n_clusters, batch_size=args.batch_size)
     idec.initialize_model(ae_weights=args.ae_weights, gamma=args.gamma, optimizer=optimizer)
     plot_model(idec.model, to_file='idec_model.png', show_shapes=True)
     idec.model.summary()
 
     # begin clustering, time not include pretraining part.
-    t0=time()
-    y_pred=idec.clustering(x, y=y, tol=args.tol, maxiter=args.maxiter,
+    t0 = time()
+    y_pred = idec.clustering(x, y=y, tol=args.tol, maxiter=args.maxiter,
                              update_interval=args.update_interval, save_dir=args.save_dir)
     print('acc:', cluster_acc(y, y_pred))
     print('clustering time: ', (time() - t0))
