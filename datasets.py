@@ -79,8 +79,8 @@ def load_mnist():
 
 def load_usps(data_path='./data/usps'):
     import os
-    if not os.path.exists(data_path+'/usps_train.jf'):
-        if not os.path.exists(data_path+'/usps_train.jf.gz'):
+    if not os.path.exists(data_path + '/usps_train.jf'):
+        if not os.path.exists(data_path + '/usps_train.jf.gz'):
             os.system('wget http://www-i6.informatik.rwth-aachen.de/~keysers/usps_train.jf.gz -P %s' % data_path)
             os.system('wget http://www-i6.informatik.rwth-aachen.de/~keysers/usps_test.jf.gz -P %s' % data_path)
         os.system('gunzip %s/usps_train.jf.gz' % data_path)
@@ -116,7 +116,7 @@ def load_reuters(data_path='./data/reuters'):
     # has been shuffled
     x = data['data']
     y = data['label']
-    x = x.reshape((x.shape[0], x.size / x.shape[0])).astype('float64')
+    x = x.reshape((x.shape[0], int(x.size / x.shape[0]))).astype('float64')
     y = y.reshape((y.size,))
     print('REUTERSIDF10K samples', x.shape)
     return x, y
