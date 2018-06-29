@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""See Unsupervised Deep Embedding for Clustering Analysis"""
+"""See Unsupervised Deep Embedding for Clustering Analysis
 
-__author__ = "Wang Gang"
-__email__ = "wanggang15@jd.com"
-__status__ = "Production"
+DEC  done
+IDEC done (pretrain)
+
+caec todo?
+
+"""
 
 import torch
 import numpy as np
@@ -88,13 +91,43 @@ class DEC(torch.nn.Module):
             self.n_cluster, self.ae_dims[-1]), requires_grad=True)
         self.kmeans = KMeans(n_clusters=self.n_cluster, n_init=20)
 
-    def init_ae(self):
+    def pretrain(self, x_all, n_epoch=20, batch_size=256):
+        """pre-training autoencoder"""
+
+        print("pretrain ...")
+        dataloader = DataLoader(x_all, batch_size=batch_size, shuffle=True, num_workers=1,
+                                drop_last=False)  # parallel for gpu tensorf, raise error
+
+        optimizer = torch.optim.Adam(self.auto_encoder.parameters())
+
+        for i_epoch in np.arange(n_epoch):
+            for i_batch, sample_batched in enumerate(dataloader):
+                sample_batched = sample_batched.cuda()
+
+                optimizer.zero_grad()
+                _, sample_batched_est = self.auto_encoder(sample_batched)
+                mse_loss = torch.nn.MSELoss(size_average=True, reduce=True)(
+                    input=sample_batched_est, target=sample_batched)
+                mse_loss.backward()
+                optimizer.step()
+
+                if i_batch % 10 == 0:
+                    print("i_epoch={:4d}, i_batch={:8d}, mse={:10.5f}".format(i_epoch, i_batch, mse_loss.item()))
+
+        torch.save(self.auto_encoder.state_dict(), "./ae_weights/pretrained_mnist_ae_weights.pth")
+        print("pretrain done")
+
+    def init_ae(self, x_all=None):
         """Init the auto encoder (theta)
              If self.ae_weights_path is None, train the ae encoder
              else, load the pre-trained weights
         """
         if self.ae_weights_path is None:
-            raise ValueError("pre_training NOT implemented, only load pretrained model supported")
+            #raise ValueError("pre_training NOT implemented, only load pretrained model supported")
+            if x_all is None:
+                raise ValueError("please specify x_all")
+
+            self.pretrain(x_all)
         else:
             print("  load ae weights from {} ...".format(self.ae_weights_path))
             self.auto_encoder.load_state_dict(torch.load(self.ae_weights_path))
@@ -152,12 +185,13 @@ class DEC(torch.nn.Module):
             p = p_unmormalized / p_unmormalized.sum(dim=1, keepdim=True).expand(-1, n_cluster)  # batch_size, n_cluster
 
         # calculate KL divengence loss: clustering_loss
-        Lc = torch.nn.KLDivLoss(size_average=True, reduce=True)(input=torch.log(q), target=p)
+        Lc = torch.nn.KLDivLoss(size_average=True, reduce=True)(input=torch.log(q), target=p)  # * n_cluster
 
         # Lr
-        Lr = torch.nn.MSELoss(size_average=True, reduce=True)(input=x_est, target=x)
+        Lr = torch.nn.MSELoss(size_average=True, reduce=True)(input=x_est, target=x)  # * x.shape[1]
 
-        loss = Lc + gamma * Lr
+        # print("Lr={:.5f}, Lc={:.5f}, gamma={}".format(Lr, Lc, gamma))
+        loss = Lr + gamma * Lc
         return loss
 
     def kl_loss(self, x):
@@ -185,11 +219,13 @@ class DEC(torch.nn.Module):
         return loss
 
 
-def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist', mode='dec'):
+def train(max_epoch=20, watch_interval=10, tol=0.001, use_gpu=True, data='mnist', mode='dec', gamma=1.0, lr=0.001):
     """
     Input:
       mode: dec using Lc; idec using Lr+gamma*Lc
 
+    Note:
+    watch_interval: not only show the eval results, but also check delta_diff, which determines when to stop iteration
     """
 
     def load_data(data='mnist'):
@@ -211,14 +247,22 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
 
     x, y, n_cluster = load_data(data=data)
     input_dim = x.shape[1]
+    # dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
+    #           n_cluster=n_cluster,
+    #           ae_weights_path="../IDEC/ae_weights/{}_ae_weights.pth".format(data))
+
     dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
               n_cluster=n_cluster,
-              ae_weights_path="../IDEC/ae_weights/{}_ae_weights.pth".format(data))
+              ae_weights_path="./ae_weights/pretrained_{}_ae_weights.pth".format(data))
+
+    # dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
+    #           n_cluster=n_cluster,
+    #           ae_weights_path=None)
 
     if use_gpu:
         dec = dec.cuda()
 
-    optimizer = torch.optim.SGD(dec.parameters(), lr=0.1, momentum=0.9)
+    # optimizer = torch.optim.SGD(dec.parameters(), lr=0.1, momentum=0.9)
 
     # optimizer = torch.optim.SGD([
     #     {"params": dec.auto_encoder.parameters(), 'lr': 0.5 * 1e-4},
@@ -227,16 +271,17 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
     #     lr=0.1, momentum=0.9)
 
     # optimizer = torch.optim.Adam([
-    #     {"params": dec.auto_encoder.parameters(), 'lr': 0.5 * 1e-4},
-    #     {"params": dec.cluster_centroid, 'lr': 1e-1},
-    # ], lr=0.0001)
-    # optimizer = torch.optim.Adam(dec.parameters(), lr=0.001)
+    #     {"params": dec.auto_encoder.parameters(), 'lr': lr * 1.0},
+    #     {"params": dec.cluster_centroid, 'lr': lr},
+    # ], lr=lr)
+    optimizer = torch.optim.Adam(dec.parameters(), lr=lr)
 
     dataloader = DataLoader(x, batch_size=256, shuffle=True, num_workers=1,
                             drop_last=False)  # parallel for gpu tensorf, raise error
 
     # Phase 1: Parameter Initialization
-    dec.init_ae()
+    dec.init_ae()    # using pretrained model
+    # dec.init_ae(x)           # pretraing model
     if use_gpu:
         dec.init_centroid(x.cuda())
     else:
@@ -259,12 +304,12 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
             if mode == "dec":
                 loss = dec.kl_loss(sample_batched)
             else:
-                loss = dec.kl_ae_loss(sample_batched)
+                loss = dec.kl_ae_loss(sample_batched, gamma=gamma)  # 1.2 ~ .886; 1~
 
             loss.backward()
             optimizer.step()
 
-            if i_batch % print_interval == 0:
+            if i_batch % watch_interval == 0:
                 result = eval_model(dec, x, y, use_gpu=use_gpu)
                 y_pred_hard = result["y_pred_hard"]
                 delta_label_ratio = np.sum(y_pred_hard != y_pred_hard_last).astype(np.float32) / y_pred_hard.shape[0]
@@ -273,8 +318,10 @@ def train(max_epoch=20, print_interval=10, tol=0.001, use_gpu=True, data='mnist'
                 print("i_epoch={:3d}, i_batch={:8d}, acc={:7.5f}, nmi={:7.5f}, ari={:7.5f}, delta_label_ratio={:7.5f}, kl_loss(@batch)={:8.5f}".format(
                     i_epoch, i_batch, result["acc"], result["nmi"], result["ari"], delta_label_ratio, loss.item()))
 
-                if delta_label_ratio < tol:
+                if delta_label_ratio < tol:  # or result["acc"] < 0.50:
                     break
+
+    return result
 
 
 def eval_model(model, x, y, use_gpu=True):
@@ -306,8 +353,22 @@ def main():
 if __name__ == '__main__':
 
     # DEC
-    # train(data="mnist")
+    # train(data="mnist", mode="dec", tol=0.001, lr=0.0001, watch_interval=10)    # wi=5, 0.865; wi=10, 有机会达到0.872
+
     # train(data="reutersidf10k")
     # train(data="usps")
 
-    train(data="mnist", mode="idec", tol=0.00001, max_epoch=100)
+    # # IDEC 0.885: gamma=1.0, lr=0.001
+    # with open("./result.csv", "w") as f:
+    #     f.write("lr,gamma,acc,nmi\n")
+
+    #     for lr in [0.0001, 0.001, 0.01, 0.1]:
+    #         for gamma in [0.01, 0.1, 1.0, 10, 100.0, 1000]:
+    #             result = train(data="mnist", mode="idec", tol=0.001, max_epoch=50,
+    #                            watch_interval=100, lr=lr, gamma=gamma)  # 0.886
+    #             f.write("{},{},{},{}\n".format(lr, gamma, result["acc"], result["nmi"]))
+
+    result = train(data="mnist", mode="idec", tol=0.001, max_epoch=100,
+                   watch_interval=5,
+                   lr=0.001,
+                   gamma=1.0)    # 0.886
