@@ -60,6 +60,7 @@ class AutoEncoder(torch.nn.Module):
         for l in self.encoder:
             x = l(x)
 
+        # x = torch.nn.functional.normalize(x, p=2, dim=1)  # normalize
         encoded = x
 
         for l in self.decoder:
@@ -91,7 +92,7 @@ class DEC(torch.nn.Module):
             self.n_cluster, self.ae_dims[-1]), requires_grad=True)
         self.kmeans = KMeans(n_clusters=self.n_cluster, n_init=20)
 
-    def pretrain(self, x_all, n_epoch=20, batch_size=256):
+    def pretrain(self, x_all, n_epoch=40, batch_size=256):
         """pre-training autoencoder"""
 
         print("pretrain ...")
@@ -251,13 +252,13 @@ def train(max_epoch=20, watch_interval=10, tol=0.001, use_gpu=True, data='mnist'
     #           n_cluster=n_cluster,
     #           ae_weights_path="../IDEC/ae_weights/{}_ae_weights.pth".format(data))
 
-    dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
-              n_cluster=n_cluster,
-              ae_weights_path="./ae_weights/pretrained_{}_ae_weights.pth".format(data))
-
     # dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
     #           n_cluster=n_cluster,
-    #           ae_weights_path=None)
+    #           ae_weights_path="./ae_weights/pretrained_{}_ae_weights.pth".format(data))
+
+    dec = DEC(ae_dims=[input_dim, 500, 500, 2000, 10],
+              n_cluster=n_cluster,
+              ae_weights_path=None)
 
     if use_gpu:
         dec = dec.cuda()
@@ -280,8 +281,8 @@ def train(max_epoch=20, watch_interval=10, tol=0.001, use_gpu=True, data='mnist'
                             drop_last=False)  # parallel for gpu tensorf, raise error
 
     # Phase 1: Parameter Initialization
-    dec.init_ae()    # using pretrained model
-    # dec.init_ae(x)           # pretraing model
+    # dec.init_ae()    # using pretrained model
+    dec.init_ae(x)           # pretraing model
     if use_gpu:
         dec.init_centroid(x.cuda())
     else:
@@ -368,7 +369,12 @@ if __name__ == '__main__':
     #                            watch_interval=100, lr=lr, gamma=gamma)  # 0.886
     #             f.write("{},{},{},{}\n".format(lr, gamma, result["acc"], result["nmi"]))
 
-    result = train(data="mnist", mode="idec", tol=0.001, max_epoch=100,
+    # result = train(data="mnist", mode="idec", tol=0.001, max_epoch=100,
+    #                watch_interval=5,
+    #                lr=0.001,
+    #                gamma=1.0)    # 0.886
+
+    result = train(data="mnist", mode="idec", tol=0.001, max_epoch=20,
                    watch_interval=5,
                    lr=0.001,
-                   gamma=1.0)    # 0.886
+                   gamma=1.0)    # ae: normailized
